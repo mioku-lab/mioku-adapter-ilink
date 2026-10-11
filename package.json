@@ -1,0 +1,60 @@
+{
+  "name": "mioku-adapter-ilink",
+  "type": "module",
+  "version": "1.0.0",
+  "description": "WeChat ClawBot (iLink) adapter for mioku, private chat only.",
+  "keywords": [
+    "mioku",
+    "wechat",
+    "weixin",
+    "ilink"
+  ],
+  "engines": {
+    "node": ">= 22.18.0"
+  },
+  "files": [
+    "dist",
+    "config.md"
+  ],
+  "scripts": {
+    "dev": "tsdown -w",
+    "build": "tsdown"
+  },
+  "bin": {
+    "mioku-adapter-ilink": "./dist/cli.mjs"
+  },
+  "exports": {
+    ".": {
+      "require": "./dist/index.cjs",
+      "import": "./dist/index.mjs"
+    },
+    "./cli": {
+      "require": "./dist/cli.cjs",
+      "import": "./dist/cli.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mioku-lab/mioku-adapter-ilink.git"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "author": "Jerryplusy <jerryplusy@outlook.com>",
+  "license": "MIT",
+  "peerDependencies": {
+    "mioku": "^1.2.0"
+  },
+  "dependencies": {
+    "consola": "^3.4.2",
+    "qrcode-terminal": "0.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.8",
+    "mioku": "workspace:*",
+    "tsdown": "^0.18.4",
+    "typescript": "^5.9.3"
+  }
+}
