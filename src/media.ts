@@ -11,6 +11,8 @@ import { fileURLToPath } from "node:url";
 import type { HttpClient, HttpResponse, MessageSegment } from "mioku";
 import type { IlinkClient } from "./client";
 import type { IlinkCdnMedia, UploadMediaTypeValue } from "./types";
+import { fetchRemote } from "./remote";
+import { errorMessage } from "./util";
 
 const TRANSFER_TIMEOUT = 120_000;
 
@@ -297,15 +299,13 @@ export class IlinkMedia {
   }
 
   async #fetchRemote(url: string): Promise<Buffer> {
-    const response = await this.#http.request({
-      method: "GET",
-      url,
-      timeout: TRANSFER_TIMEOUT,
-    });
-    if (response.status < 200 || response.status >= 300)
-      throw new Error(`下载 ${url} 失败: HTTP ${response.status}`);
-    if (response.body.byteLength > REMOTE_MAX_BYTES)
-      throw new Error(`下载 ${url} 失败: 文件超过 100MB`);
-    return toBuffer(response.body);
+    try {
+      return await fetchRemote(url, {
+        maxBytes: REMOTE_MAX_BYTES,
+        timeout: TRANSFER_TIMEOUT,
+      });
+    } catch (err) {
+      throw new Error(`下载远程文件失败: ${errorMessage(err)}`);
+    }
   }
 }
