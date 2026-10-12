@@ -137,7 +137,7 @@ const buildMediaSegment = async (
     (size === undefined || size <= options.maxBytes);
   if (wanted && draft.ref) {
     try {
-      const buffer = await options.media.download(draft.ref);
+      const buffer = await options.media.download(draft.ref, options.maxBytes);
       if (buffer.length > options.maxBytes)
         throw new Error(`超过 ${Math.round(options.maxBytes / 1048576)}MB 上限`);
       mime = sniffMime(buffer) ?? mime ?? "application/octet-stream";
@@ -209,12 +209,21 @@ export interface OutboundResult {
   readonly dropped: string[];
 }
 
+const isHighSurrogate = (code: number): boolean =>
+  code >= 0xd800 && code <= 0xdbff;
+
+/** 不在代理对中间切断 */
+const safeCut = (text: string, end: number): number =>
+  end > 0 && end < text.length && isHighSurrogate(text.charCodeAt(end - 1))
+    ? end - 1
+    : end;
+
 export const splitText = (text: string, limit = TEXT_LIMIT): string[] => {
   const chunks: string[] = [];
   let rest = text;
   while (rest.length > limit) {
     const cut = rest.lastIndexOf("\n", limit);
-    const end = cut > limit / 2 ? cut : limit;
+    const end = safeCut(rest, cut > limit / 2 ? cut : limit);
     chunks.push(rest.slice(0, end));
     rest = rest.slice(end).replace(/^\n/, "");
   }

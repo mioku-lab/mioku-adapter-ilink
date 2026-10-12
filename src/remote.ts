@@ -8,6 +8,8 @@ const MAX_REDIRECTS = 5;
 export interface RemoteFetchOptions {
   readonly maxBytes: number;
   readonly timeout: number;
+  /** 是否拒绝内网与保留地址，默认 true；下载自家 CDN 时可关闭 */
+  readonly guard?: boolean;
 }
 
 type Hop =
@@ -105,7 +107,8 @@ const requestOnce = (
       return;
     }
     const host = url.hostname.replace(/^\[|\]$/g, "");
-    if (net.isIP(host) && isBlockedAddress(host)) {
+    const guard = options.guard !== false;
+    if (guard && net.isIP(host) && isBlockedAddress(host)) {
       reject(new Error("拒绝访问内网或保留地址"));
       return;
     }
@@ -115,7 +118,7 @@ const requestOnce = (
       url,
       {
         method: "GET",
-        lookup: guardedLookup,
+        ...(guard ? { lookup: guardedLookup } : {}),
         signal: AbortSignal.timeout(options.timeout),
       },
       (res) => {

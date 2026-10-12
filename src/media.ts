@@ -18,7 +18,7 @@ const TRANSFER_TIMEOUT = 120_000;
 
 const UPLOAD_ATTEMPTS = 3;
 
-const REMOTE_MAX_BYTES = 100 * 1024 * 1024;
+const MAX_TRANSFER_BYTES = 100 * 1024 * 1024;
 
 export interface IlinkMediaRef extends IlinkCdnMedia {
   readonly aeskey?: string;
@@ -200,21 +200,29 @@ export class IlinkMedia {
     this.#cdnBaseUrl = options.cdnBaseUrl.replace(/\/+$/, "");
   }
 
-  async download(ref: IlinkMediaRef): Promise<Buffer> {
+  /** 下载并解密 CDN 媒体；maxBytes 在下载过程中生效，不会先读满内存 */
+  async download(
+    ref: IlinkMediaRef,
+    maxBytes = MAX_TRANSFER_BYTES,
+  ): Promise<Buffer> {
+    const full = ref.full_url?.trim();
     const url =
-      ref.full_url?.trim() ||
+      full ||
       (ref.encrypt_query_param
         ? `${this.#cdnBaseUrl}/download?encrypted_query_param=${encodeURIComponent(ref.encrypt_query_param)}`
         : undefined);
     if (!url) throw new Error("媒体缺少下载地址");
-    const response = await this.#http.request({
-      method: "GET",
-      url,
-      timeout: TRANSFER_TIMEOUT,
-    });
-    if (response.status !== 200)
-      throw new Error(`CDN 下载失败: HTTP ${response.status}`);
-    const data = toBuffer(response.body);
+    let data: Buffer;
+    try {
+      data = await fetchRemote(url, {
+        maxBytes,
+        timeout: TRANSFER_TIMEOUT,
+        // full_url 由服务端下发，按不可信地址校验；cdnBaseUrl 由使用者配置
+        guard: Boolean(full),
+      });
+    } catch (err) {
+      throw new Error(`CDN 下载失败: ${errorMessage(err)}`);
+    }
     const key = resolveAesKey(ref);
     return key ? decryptAesEcb(data, key) : data;
   }
@@ -301,7 +309,7 @@ export class IlinkMedia {
   async #fetchRemote(url: string): Promise<Buffer> {
     try {
       return await fetchRemote(url, {
-        maxBytes: REMOTE_MAX_BYTES,
+        maxBytes: MAX_TRANSFER_BYTES,
         timeout: TRANSFER_TIMEOUT,
       });
     } catch (err) {

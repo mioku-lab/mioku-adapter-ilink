@@ -5,6 +5,8 @@ export interface IlinkInstanceConfig {
   name?: string;
   nickname?: string;
   autoLogin?: boolean;
+  master?: boolean;
+  allowFrom?: string[] | string;
   baseUrl?: string;
   cdnBaseUrl?: string;
   routeTag?: string;
@@ -16,6 +18,8 @@ export interface ResolvedIlinkInstance {
   readonly name: string;
   readonly nickname: string;
   readonly autoLogin: boolean;
+  readonly master: boolean;
+  readonly allowFrom: readonly string[];
   readonly baseUrl?: string;
   readonly cdnBaseUrl: string;
   readonly routeTag?: string;
@@ -29,6 +33,8 @@ export interface IlinkAdapterConfig {
 
 export const DEFAULT_INSTANCE = {
   autoLogin: true,
+  master: false,
+  allowFrom: [] as readonly string[],
   cdnBaseUrl: ILINK_CDN_BASE_URL,
   autoDownload: ["image", "record"] as readonly IlinkMediaKind[],
   mediaMaxMB: 20,
@@ -75,6 +81,25 @@ const mediaKinds = (value: unknown, field: string): IlinkMediaKind[] => {
   return Array.from(new Set(value as IlinkMediaKind[]));
 };
 
+/** 允许名单：数组，或逗号/换行分隔的字符串（配置表单用 text 输入） */
+const allowList = (value: unknown, field: string): string[] => {
+  if (value == null || value === "") return [];
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[\s,，;；]+/)
+      : undefined;
+  if (!raw) throw new Error(`${field} 必须是数组或用逗号分隔的用户 id`);
+  const ids: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string" && typeof item !== "number")
+      throw new Error(`${field} 只能填用户 id`);
+    const id = String(item).trim();
+    if (id) ids.push(id);
+  }
+  return Array.from(new Set(ids));
+};
+
 export const resolveInstance = (
   raw: unknown,
   index: number,
@@ -91,6 +116,8 @@ export const resolveInstance = (
     name,
     nickname: optionalText(raw.nickname, at("nickname")) ?? name,
     autoLogin: flag(raw.autoLogin, DEFAULT_INSTANCE.autoLogin, at("autoLogin")),
+    master: flag(raw.master, DEFAULT_INSTANCE.master, at("master")),
+    allowFrom: allowList(raw.allowFrom, at("allowFrom")),
     baseUrl: url(raw.baseUrl, at("baseUrl")),
     cdnBaseUrl: url(raw.cdnBaseUrl, at("cdnBaseUrl")) ?? DEFAULT_INSTANCE.cdnBaseUrl,
     routeTag: optionalText(

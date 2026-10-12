@@ -1,7 +1,7 @@
 {
   "name": "mioku-adapter-ilink",
   "type": "module",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "WeChat ClawBot (iLink) adapter for mioku, private chat only.",
   "keywords": [
     "mioku",

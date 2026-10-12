@@ -7,11 +7,13 @@
 ## 特性
 
 - **扫码登录**：配置向导或启动日志中输出终端二维码，凭据保存在本地，重启免扫码
-- **长轮询收消息**：同步游标持久化，重启从断点继续；网络异常自动退避重试
+- **长轮询收消息**：同步游标持久化，重启从断点继续；网络异常自动退避重试，会话异常自动重启
 - **凭据失效自愈**：收到 errcode -14 时下线并重新发起扫码，扫码后自动恢复
 - **context_token 托管**：iLink 回复必须带回用户最近一条消息的 context_token，适配器自动维护并持久化，重启后仍可主动发消息
+- **主人托管**：`master` 打开时把扫码用户写进 `mioku.owners`，关闭时移除
+- **入口过滤**：`allowFrom` 可限定只有指定微信用户的消息进入框架
 - **媒体收发**：图片、语音、视频、文件，CDN 的 AES-128-ECB 加解密由适配器完成
-- **长文本分段**：超过 4000 字自动拆分；合并转发拍平为普通消息
+- **长文本分段**：超过 4000 字自动拆分（不切断 emoji）；合并转发拍平为普通消息
 - **多账号**：每个实例一个 bot；支持「对方正在输入」状态
 
 ## 安装
@@ -36,7 +38,7 @@ bunx mioku-adapter-ilink
 
 - 把凭据写入 `data/ilink/<实例名>/account.json`
 - 在 `package.json` 的 `mioku.adapters.ilink.instances` 中登记实例
-- 询问是否把扫码的微信用户加入 `mioku.owners`
+- 询问是否把扫码的微信用户设为主人，回答会写进实例的 `master` 开关
 
 服务端要求二次校验时，按提示输入手机上显示的数字。再次运行向导并输入已有实例名，即可为该实例重新登录。
 
@@ -67,15 +69,24 @@ bunx mioku-adapter-ilink
 | `name` | string | `bot1`、`bot2`… | 实例名，决定凭据目录 `data/ilink/<name>`，只能包含字母、数字、`-`、`_` |
 | `nickname` | string | 同 `name` | `.status` 等处展示的昵称 |
 | `autoLogin` | boolean | `true` | 未登录或凭据失效时在日志输出二维码并等待扫码 |
+| `master` | boolean | `false` | 开启后每次启动把扫码用户写入 `mioku.owners`（master 权限）；关闭时移除本适配器写入的那个 id |
+| `allowFrom` | string[] \| string | `[]` | 只处理这些用户的消息，数组或逗号分隔的字符串；留空表示不限制 |
 | `autoDownload` | string[] | `["image", "record"]` | 收到消息时自动下载的媒体：`image` / `record` / `video` / `file`；`true` 为全部，`false` 为不下载 |
-| `mediaMaxMB` | number | `20` | 自动下载的单个媒体大小上限 |
+| `mediaMaxMB` | number | `20` | 自动下载的单个媒体大小上限，下载过程中即生效 |
 | `baseUrl` | string | 登录时下发 | iLink API 地址，一般不用填 |
 | `cdnBaseUrl` | string | `https://novac2c.cdn.weixin.qq.com/c2c` | 媒体 CDN 地址 |
 | `routeTag` | string | — | 透传为 `SKRouteTag` 请求头 |
 
 ## 主人与权限
 
-iLink 的用户 id 形如 `xxxx@im.wechat`。把主人的 id 加入 `mioku.owners` 才能使用主人指令；配置向导会提示添加扫码者，其他用户的 id 可以从日志 `[私:(xxxx@im.wechat)]` 中获取。
+iLink 的用户 id 形如 `xxxx@im.wechat`，登录时的 `ilink_user_id` 与消息里的 `from_user_id` 是同一个值。框架的 master 只看 `mioku.owners`，适配器提供两种方式：
+
+- **自动托管**：把实例的 `master` 设为 `true`，适配器每次启动都会把扫码用户写进 `mioku.owners`；改回 `false` 时会把自己写入的那个 id 移除。手动加进 `owners` 的 id 不会被移除。
+- **手动维护**：保持 `master` 为 `false`，自己把 id 加进 `mioku.owners`。当前用户 id 可以从日志 `[私:(xxxx@im.wechat)]` 或扫码后的登录日志里取。
+
+`owners` 是全局名单，多个实例共用；如果想让不同实例有不同主人，只能拆成多个进程。
+
+关于「谁能用这个 bot」：iLink 没有好友门槛，`allowFrom` 留空时任何能给这个 bot 发消息的人都会进入框架，只会被命令自身的 `permission` 拦住。建议填上 `allowFrom`，或用 `config/core/access-control.json` 进一步收敛。
 
 ## 能力支持
 
@@ -140,7 +151,7 @@ ctx.handle("ilink:message", async (e) => {
 | 方法 | 说明 |
 | --- | --- |
 | `sendTyping(userId, typing = true)` | 显示或取消「对方正在输入」 |
-| `downloadMedia(seg)` | 下载并解密入站媒体段 |
+| `downloadMedia(seg)` | 下载并解密入站媒体段，单文件上限 100MB |
 | `sendApi(action, params)` | 调用 iLink 原生接口，`action` 可写 `getconfig` 或 `ilink/bot/getconfig` |
 | `client` | 底层 `IlinkClient` |
 | `owner_id` | 扫码登录该 bot 的微信用户 |
@@ -152,15 +163,16 @@ ctx.handle("ilink:message", async (e) => {
 | 文件 | 内容 |
 | --- | --- |
 | `account.json` | bot 凭据（token、账号 id、API 地址、X-WECHAT-UIN），**等同密码，切勿提交或外传** |
-| `sync.json` | getupdates 同步游标 |
+| `sync.json` | getupdates 同步游标，token 变化时自动清空 |
 | `peers.json` | 每个用户最近的 context_token 与活跃时间 |
+| `owner.json` | `master` 托管时记录本适配器写进 `mioku.owners` 的 id |
 
 删除 `account.json` 即可强制重新扫码。
 
 ## 已知限制
 
 - 只能私聊：bot 收不到群消息，也没有加好友、撤回、编辑、头像、昵称等接口
-- 主动消息依赖 context_token：从未给 bot 发过消息的用户无法主动推送
+- 主动消息依赖 context_token：从未给 bot 发过消息的用户无法主动推送；凭据失效（errcode -14）时已有 context_token 会一并作废
 - 同一凭据同一时间只应有一个进程在长轮询，重新扫码后旧凭据可能失效
 - mioku 默认把 15 秒内同一用户的相同内容视为重复消息，可通过 `mioku.dedup.cross_adapter` 调整
 - iLink 不是公开的开发者产品，接口可能变化，个人号接入存在被限制的风险，重要业务建议使用企业微信
@@ -170,6 +182,8 @@ ctx.handle("ilink:message", async (e) => {
 | 现象 | 处理 |
 | --- | --- |
 | 日志出现 errcode -14 | 凭据失效，扫描日志中的新二维码，或运行配置向导重新登录 |
+| 扫码后仍提示「该微信已绑定」 | 删除 `data/ilink/<实例名>/account.json` 后重新扫码 |
+| 主人指令没有反应 | 打开实例的 `master`，或把日志里的用户 id 手动加入 `mioku.owners` |
 | 主动消息发送失败 | 该用户需要先给 bot 发过消息 |
 | 提示需要输入手机上显示的数字 | 运行 `bunx mioku-adapter-ilink` 在向导中完成登录 |
 | 收不到群消息 | iLink 只支持私聊，属正常现象 |

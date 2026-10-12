@@ -31,6 +31,8 @@ export { IlinkMedia, decryptAesEcb, encryptAesEcb } from "./media";
 export type { IlinkMediaRef, UploadedMedia } from "./media";
 export { buildInboundMessage, buildOutbound, splitText } from "./message";
 export type { InboundOptions, OutboundUnit } from "./message";
+export { syncManagedOwner } from "./owners";
+export type { OwnerSyncOptions } from "./owners";
 export type { IlinkPeer } from "./peers";
 export type { StoredAccount } from "./store";
 export * from "./types";

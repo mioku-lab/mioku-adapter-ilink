@@ -1,5 +1,7 @@
-import { errorCodeOf, isTokenExpired } from "./client";
-import { loginWithQrcode } from "./login";
+import path from "node:path";
+
+import { errorCodeOf, IlinkApiError, isTokenExpired } from "./client";
+import { IlinkLoginError, loginWithQrcode } from "./login";
 import { renderQrcode } from "./qrcode";
 import { ILINK_BASE_URL } from "./types";
 import { errorMessage, sleep } from "./util";
@@ -16,8 +18,19 @@ const BACKOFF_DELAY = 30_000;
 const MAX_FAILURES = 3;
 const RELOGIN_DELAY = 60 * 60_000;
 const STORE_CHECK_INTERVAL = 30_000;
+const RESTART_DELAY_MAX = 5 * 60_000;
 
 const WIZARD_HINT = "在项目目录运行 bunx mioku-adapter-ilink 扫码登录";
+
+/** 客户端本地超时：请求跑满超时时间，且失败发生在网络层 */
+const isLocalTimeout = (
+  err: unknown,
+  startedAt: number,
+  timeout: number,
+): boolean =>
+  err instanceof IlinkApiError &&
+  err.status === 0 &&
+  Date.now() - startedAt >= timeout;
 
 export interface IlinkGatewayOptions {
   readonly name: string;
@@ -33,6 +46,8 @@ export interface IlinkGatewayHandlers {
   onReady(account: StoredAccount): Promise<void>;
   onOnline(): Promise<void>;
   onOffline(reason: string): Promise<void>;
+  /** 凭据失效：旧的 context_token 一并作废 */
+  onSessionExpired(): void;
   onMessages(messages: readonly IlinkMessage[]): void;
 }
 
@@ -83,24 +98,50 @@ export class IlinkGateway implements AdapterGateway {
   }
 
   async #run(): Promise<void> {
-    const { client, logger, label } = this.#options;
+    const { logger, label } = this.#options;
+    let failures = 0;
     while (!this.#stopped) {
-      const account = await this.#acquire();
-      if (!account || this.#stopped) return;
-      client.update({
-        token: account.token,
-        uin: account.uin,
-        baseUrl: this.#options.baseUrl ?? account.baseUrl ?? ILINK_BASE_URL,
-      });
-      await this.#notify("start");
-      this.#active = true;
-      await this.#handlers.onReady(account);
-      if ((await this.#poll()) === "stopped") return;
-      this.#active = false;
-      this.#expiredToken = account.token;
-      logger.error(`${label} 登录凭据已失效 (errcode -14)，需要重新扫码登录`);
-      await this.#handlers.onOffline("登录凭据已失效");
+      try {
+        await this.#session();
+        failures = 0;
+      } catch (err) {
+        if (this.#stopped) return;
+        failures += 1;
+        const delay = Math.min(
+          RETRY_DELAY * 2 ** (failures - 1),
+          RESTART_DELAY_MAX,
+        );
+        logger.error(
+          `${label} 会话异常退出（第 ${failures} 次），${Math.round(delay / 1_000)} 秒后重启: ${errorMessage(err)}`,
+        );
+        if (this.#active) {
+          this.#active = false;
+          await this.#notify("stop");
+        }
+        await sleep(delay, this.#signal);
+      }
     }
+  }
+
+  /** 一次登录 + 长轮询的完整生命周期 */
+  async #session(): Promise<void> {
+    const { client, logger, label } = this.#options;
+    const account = await this.#acquire();
+    if (!account || this.#stopped) return;
+    client.update({
+      token: account.token,
+      uin: account.uin,
+      baseUrl: this.#options.baseUrl ?? account.baseUrl ?? ILINK_BASE_URL,
+    });
+    await this.#notify("start");
+    this.#active = true;
+    await this.#handlers.onReady(account);
+    if ((await this.#poll()) === "stopped") return;
+    this.#active = false;
+    this.#expiredToken = account.token;
+    logger.error(`${label} 登录凭据已失效 (errcode -14)，需要重新扫码登录`);
+    this.#handlers.onSessionExpired();
+    await this.#handlers.onOffline("登录凭据已失效");
   }
 
   async #acquire(): Promise<StoredAccount | undefined> {
@@ -174,8 +215,12 @@ export class IlinkGateway implements AdapterGateway {
       );
       return account;
     } catch (err) {
-      if (!this.#stopped)
-        logger.error(`${label} 扫码登录失败: ${errorMessage(err)}`);
+      if (this.#stopped) return undefined;
+      if (err instanceof IlinkLoginError && err.reason === "bound")
+        logger.warn(
+          `${label} 服务端认为该微信已绑定，但本地凭据已失效；删除 ${path.join(store.dir, "account.json")} 后重新扫码`,
+        );
+      logger.error(`${label} 扫码登录失败: ${errorMessage(err)}`);
       return undefined;
     }
   }
@@ -188,10 +233,16 @@ export class IlinkGateway implements AdapterGateway {
     let online = true;
     while (!this.#stopped) {
       let resp: GetUpdatesResp;
+      const startedAt = Date.now();
+      const wait = timeout + POLL_MARGIN;
       try {
-        resp = await client.getUpdates(buf, timeout + POLL_MARGIN, this.#signal);
+        resp = await client.getUpdates(buf, wait, this.#signal);
       } catch (err) {
         if (this.#stopped) break;
+        if (isLocalTimeout(err, startedAt, wait)) {
+          logger.debug(`${label} 长轮询本地超时，按空轮询继续`);
+          continue;
+        }
         failures += 1;
         online = await this.#degrade(
           failures,

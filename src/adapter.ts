@@ -16,6 +16,7 @@ import { buildMessageEvent, messageIdOf } from "./event";
 import { IlinkGateway } from "./gateway";
 import { IlinkMedia } from "./media";
 import { buildInboundMessage, quoteIdOf, type InboundOptions } from "./message";
+import { syncManagedOwner } from "./owners";
 import { PeerBook } from "./peers";
 import { createIlinkStatusProvider, type IlinkTraffic } from "./status";
 import { AccountStore, type StoredAccount } from "./store";
@@ -47,7 +48,7 @@ const buildInstance = (
   logger: Logger,
 ): IlinkInstance => {
   const label = cfg.name;
-  const traffic: IlinkTraffic = { sent: 0, received: 0 };
+  const traffic: IlinkTraffic = { sent: 0, received: 0, blocked: 0 };
   const data: IlinkBotData = {
     bot_id: "",
     adapter: NAME,
@@ -58,7 +59,9 @@ const buildInstance = (
   const queues = new Map<string, Promise<void>>();
   const maxBytes = cfg.mediaMaxMB * 1024 * 1024;
   const autoDownload = new Set(cfg.autoDownload);
+  const allowed = new Set(cfg.allowFrom);
   let context: AdapterContext | undefined;
+  let store: AccountStore | undefined;
   let client: IlinkClient | undefined;
   let media: IlinkMedia | undefined;
   let peers: PeerBook | undefined;
@@ -97,7 +100,7 @@ const buildInstance = (
   };
 
   const onReady = async (account: StoredAccount): Promise<void> => {
-    if (!context || !client || !media || !peers || !typing) return;
+    if (!context || !client || !media || !peers || !typing || !store) return;
     if (bot && bot.bot_id !== account.accountId) await teardown("登录账号已变更");
     if (accountId !== account.accountId) {
       accountId = account.accountId;
@@ -107,6 +110,12 @@ const buildInstance = (
     }
     data.bot_id = account.accountId;
     data.owner_id = account.userId;
+    await syncManagedOwner({
+      enabled: cfg.master,
+      userId: account.userId,
+      store,
+      logger,
+    });
     if (!bot) {
       const created = bindCapabilities(
         createIlinkBot({
@@ -193,6 +202,11 @@ const buildInstance = (
       if (raw.message_state === MessageState.GENERATING) continue;
       const userId = raw.from_user_id?.trim();
       if (!userId) continue;
+      if (allowed.size > 0 && !allowed.has(userId)) {
+        traffic.blocked++;
+        logger.debug(`已忽略未授权用户 ${userId} 的消息`);
+        continue;
+      }
       peers?.touch(userId, raw.context_token || undefined);
       traffic.received++;
       enqueue(userId, () => handle(raw, userId));
@@ -203,10 +217,7 @@ const buildInstance = (
     async start(next: AdapterContext): Promise<void> {
       context = next;
       const http = next.getDriver().http;
-      const store = new AccountStore(
-        path.join(getDataDir(), ILINK_DATA_DIR),
-        cfg.name,
-      );
+      store = new AccountStore(path.join(getDataDir(), ILINK_DATA_DIR), cfg.name);
       const saved = store.loadAccount();
       client = new IlinkClient({
         http,
@@ -234,6 +245,11 @@ const buildInstance = (
           onOffline: async (reason) => {
             peers?.flush();
             await setOnline(false, reason);
+          },
+          onSessionExpired: () => {
+            peers?.clearTokens();
+            peers?.flush();
+            typing?.clear();
           },
           onMessages,
         },

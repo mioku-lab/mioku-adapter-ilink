@@ -5,6 +5,7 @@ import type { PeerBook } from "./peers";
 export interface IlinkTraffic {
   sent: number;
   received: number;
+  blocked: number;
 }
 
 export const createIlinkStatusProvider =
@@ -24,5 +25,6 @@ export const createIlinkStatusProvider =
     data: {
       owner_id: bot.owner_id,
       base_url: bot.client.baseUrl,
+      blocked: traffic.blocked,
     },
   });

@@ -18,6 +18,7 @@ export interface StoredPeer {
 const ACCOUNT_FILE = "account.json";
 const SYNC_FILE = "sync.json";
 const PEERS_FILE = "peers.json";
+const OWNER_FILE = "owner.json";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -81,6 +82,9 @@ export class AccountStore {
     if (previous && previous.accountId !== account.accountId) {
       this.#remove(SYNC_FILE);
       this.#remove(PEERS_FILE);
+    } else if (previous && previous.token !== account.token) {
+      // 换会话后旧游标不再对应服务端上下文
+      this.#remove(SYNC_FILE);
     }
     this.#write(ACCOUNT_FILE, account, true);
   }
@@ -94,6 +98,17 @@ export class AccountStore {
 
   saveSyncBuf(buf: string): void {
     this.#write(SYNC_FILE, { get_updates_buf: buf });
+  }
+
+  /** 本实例写入 mioku.owners 的用户 id */
+  loadManagedOwner(): string | undefined {
+    const raw = this.#read(OWNER_FILE);
+    return isRecord(raw) ? text(raw.user_id) : undefined;
+  }
+
+  saveManagedOwner(userId: string | undefined): void {
+    if (userId) this.#write(OWNER_FILE, { user_id: userId }, true);
+    else this.#remove(OWNER_FILE);
   }
 
   loadPeers(): Map<string, StoredPeer> {

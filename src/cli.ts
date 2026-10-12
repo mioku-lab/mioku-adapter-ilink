@@ -156,6 +156,7 @@ export const runWizard = async (ctx: IlinkCliContext): Promise<IlinkCliResult> =
   const dataRoot = path.join(ctx.cwd, "data", "ilink");
   const instances = existingInstances(readPackage(ctx.cwd));
   const scanners: string[] = [];
+  const logged: Array<{ instance: IlinkInstanceInput; scanner?: string }> = [];
   log.info("正在配置 ilink 适配器（微信 ClawBot，仅支持私聊）");
   log.info("登录凭据保存在 data/ilink/<实例名>/，请勿提交到版本库");
   log.info("");
@@ -189,8 +190,20 @@ export const runWizard = async (ctx: IlinkCliContext): Promise<IlinkCliResult> =
       scanners.push(result.scanner);
     if (!result.ok)
       log.info("该实例未登录，启动机器人后会在日志中输出二维码，也可再次运行本向导");
+    logged.push({ instance, scanner: result.scanner });
     more = await confirm("是否继续添加或重新登录其他实例？", { initial: false });
     if (more) log.info("");
+  }
+
+  const scanned = logged.filter((item) => item.scanner);
+  if (scanned.length > 0) {
+    const ids = Array.from(new Set(scanned.map((item) => item.scanner!)));
+    const master = await confirm(
+      `是否把扫码用户 ${ids.join("、")} 设为主人（写入 mioku.owners）？`,
+      { initial: true },
+    );
+    for (const item of scanned) item.instance.master = master;
+    if (!master) log.info("已关闭 master，之后可在配置里按实例打开");
   }
   return { config: { instances }, scanners };
 };
@@ -217,23 +230,13 @@ if (isRunningAsMain()) {
       consola.error("未找到 package.json，请在机器人项目根目录运行此向导");
       process.exit(1);
     }
-    const { config, scanners } = await runWizard({ cwd });
+    const { config } = await runWizard({ cwd });
     const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as {
       mioku?: Record<string, unknown>;
     };
     const mioku = (pkg.mioku = pkg.mioku ?? {});
     const adapters = (mioku.adapters as Record<string, unknown> | undefined) ?? {};
     mioku.adapters = { ...adapters, ilink: config };
-    const owners = Array.isArray(mioku.owners) ? mioku.owners : [];
-    const known = owners.map(String);
-    const newcomers = scanners.filter((id) => !known.includes(id));
-    if (
-      newcomers.length > 0 &&
-      (await confirm(`将扫码用户 ${newcomers.join("、")} 设为机器人主人？`, {
-        initial: true,
-      }))
-    )
-      mioku.owners = [...owners, ...newcomers];
     fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`, "utf-8");
     consola.success("已写入 ilink 适配器配置");
   })();

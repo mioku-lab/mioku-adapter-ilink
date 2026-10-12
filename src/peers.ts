@@ -49,6 +49,12 @@ export class PeerBook {
     return this.#peers.get(userId)?.context_token;
   }
 
+  /** 丢弃全部 context_token：会话失效后旧 token 不再可用 */
+  clearTokens(): void {
+    for (const [userId, peer] of this.#peers)
+      this.#peers.set(userId, { last_seen: peer.last_seen });
+  }
+
   get(userId: string): IlinkPeer | undefined {
     const peer = this.#peers.get(userId);
     return peer ? { user_id: userId, ...peer } : undefined;
